@@ -132,6 +132,12 @@ header{
 .b-time{ font-variant-numeric:tabular-nums; font-weight:700; font-size:12px; opacity:.85; }
 .b-name{ font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .b-meta{ display:flex; gap:8px; font-size:11px; opacity:.78; margin-top:1px; }
+/* короткие блоки: убираем ресайз-полосу (она перекрывала весь блок) и второй ряд,
+   чтобы тап открывал редактор — длительность меняется степперами ±5/±15 */
+.block.short{ padding-top:1px; padding-bottom:1px; }
+.block.short .resize-handle{ display:none; }
+.block.short .b-meta{ display:none; }
+.block.short .b-top{ font-size:11px; }
 
 .gap{
   position:absolute; left:0; right:0; box-sizing:border-box;
@@ -539,6 +545,7 @@ function makeBlock(task){
 function positionBlock(el, item){
   el.style.top=item.top+"px";
   el.style.height=item.height+"px";
+  el.classList.toggle("short", item.height < 30); // короткий блок -> тап открывает редактор
   el.querySelector(".b-time").textContent=fmtTime(item.startMin);
 }
 function renderTimeline(){
