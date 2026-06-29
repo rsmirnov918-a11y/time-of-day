@@ -51,6 +51,9 @@ header{
 }
 .tools button:hover{border-color:var(--accent)}
 .tools button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+.tools button.icon{ font-size:16px; line-height:1; padding:6px 9px; }
+.tools button:disabled{ opacity:.35; cursor:default; }
+.tools button:disabled:hover{ border-color:var(--line); }
 
 /* блок аутентификации */
 .auth{ display:flex; align-items:center; gap:8px; }
@@ -222,6 +225,8 @@ header{
 <header>
   <div class="brand">🗓️ Планировщик</div>
   <div class="tools">
+    <button id="undoBtn" class="icon" title="Отменить (Ctrl+Z)" disabled>↶</button>
+    <button id="redoBtn" class="icon" title="Вернуть (Ctrl+Y)" disabled>↷</button>
     <label class="start">Старт <input type="time" id="dayStart" step="300"></label>
     <label class="start">до <input type="time" id="dayEnd" step="300"></label>
     <button id="addBtn" class="primary">+ Задача</button>
@@ -368,6 +373,7 @@ function saveSoon(){
   if(_saveTimer) clearTimeout(_saveTimer);
   _saveTimer=setTimeout(()=>Storage.save(state),250); // оффлайн-кэш
   Cloud.pushSoon();                                   // облако (если вошёл)
+  History.record();                                   // шаг истории (undo/redo)
 }
 
 /* ===================== ОБЛАКО (Firebase Firestore + Auth) =====================
@@ -428,6 +434,7 @@ const Cloud = (() => {
     Storage.save(state);                            // обновляем оффлайн-кэш
     if(!state.days[currentDay]) currentDay = "mon";
     renderAll();
+    History.reset();                                // прилетело из облака — историю обнуляем
     applyingRemote = false;
   }
 
@@ -474,6 +481,59 @@ function renderAuthUI(){
     if(b) b.onclick = ()=>Cloud.login();
   }
 }
+
+/* ===================== ИСТОРИЯ (undo / redo) =====================
+   Снимки всего state. Быстрые правки коалесятся по паузе (один шаг истории).
+   record() дёргается на каждое локальное изменение (из saveSoon). */
+const History = (() => {
+  let undo=[], redo=[], baseline="null", timer=null;
+  const MAX=120;
+  const snap=()=>JSON.stringify(state);
+  function init(){ baseline=snap(); undo=[]; redo=[]; updateButtons(); }
+  function reset(){ init(); }                 // после прихода из облака — историю обнуляем
+  function record(){                          // изменение: запланировать коммит с коалесингом
+    if(timer) clearTimeout(timer);
+    timer=setTimeout(commit, 350);
+    updateButtons();
+  }
+  function commit(){
+    timer=null;
+    const cur=snap();
+    if(cur===baseline) return;
+    undo.push(baseline); if(undo.length>MAX) undo.shift();
+    redo=[]; baseline=cur; updateButtons();
+  }
+  function flush(){ if(timer){ clearTimeout(timer); timer=null; } commit(); }
+  function apply(json){
+    state=JSON.parse(json);
+    if(!state.days[currentDay]) currentDay="mon";
+    baseline=json;
+    Storage.save(state); Cloud.pushSoon();    // применённое состояние тоже кэшируем и синкаем
+    renderAll(); updateButtons();
+  }
+  function undoOp(){
+    flush();
+    if(!undo.length) return;
+    redo.push(baseline);
+    apply(undo.pop());
+    toast("Отменено");
+  }
+  function redoOp(){
+    flush();
+    if(!redo.length) return;
+    undo.push(baseline);
+    apply(redo.pop());
+    toast("Возвращено");
+  }
+  function updateButtons(){
+    const ub=document.getElementById("undoBtn"), rb=document.getElementById("redoBtn");
+    if(!ub) return;
+    const pending = snap()!==baseline;
+    ub.disabled = !(undo.length>0 || pending);
+    rb.disabled = redo.length===0;
+  }
+  return { init, reset, record, undo:undoOp, redo:redoOp };
+})();
 
 /* ===================== СОСТОЯНИЕ ===================== */
 function template(){
@@ -849,11 +909,24 @@ dayStartInput.addEventListener("change", ()=>{
 dayEndInput.addEventListener("change", ()=>{
   if(/^\d{1,2}:\d{2}$/.test(dayEndInput.value)){ state.settings.dayEnd=dayEndInput.value; renderTimeline(); saveSoon(); }
 });
+
+/* undo / redo: кнопки + клавиатура */
+$("undoBtn").addEventListener("click", ()=>History.undo());
+$("redoBtn").addEventListener("click", ()=>History.redo());
+window.addEventListener("keydown", (e)=>{
+  if(!(e.ctrlKey||e.metaKey)) return;
+  const tag=(e.target.tagName||"").toLowerCase();
+  if(tag==="input"||tag==="textarea") return;   // не мешаем нативному undo в полях
+  if(press||resizing) return;                    // не дёргать во время драга/ресайза
+  const k=e.key.toLowerCase();
+  if(k==="z" && !e.shiftKey){ e.preventDefault(); History.undo(); }
+  else if(k==="y" || (k==="z" && e.shiftKey)){ e.preventDefault(); History.redo(); }
+});
 $("resetBtn").addEventListener("click", ()=>{
   if(!confirm("Сбросить все дни к стартовому шаблону?")) return;
   state=template(); Storage.save(state);
   currentDay = state.days[TODAY_KEY] ? TODAY_KEY : "mon";
-  renderAll(); Cloud.pushSoon(); toast("Сброшено к шаблону");
+  renderAll(); Cloud.pushSoon(); History.record(); toast("Сброшено к шаблону");
 });
 themeBtn.addEventListener("click", ()=>{
   state.settings.theme = state.settings.theme==="dark" ? "light" : "dark";
@@ -886,7 +959,7 @@ $("imLoad").addEventListener("click", ()=>{
     const norm=validateState(JSON.parse(imText.value));
     state=norm; Storage.save(state);
     if(!state.days[currentDay]) currentDay="mon";
-    importOverlay.hidden=true; renderAll(); Cloud.pushSoon(); toast("Импортировано");
+    importOverlay.hidden=true; renderAll(); Cloud.pushSoon(); History.record(); toast("Импортировано");
   }catch(err){ imErr.textContent="Ошибка: "+(err.message||err); }
 });
 /* копирование дня */
@@ -899,7 +972,7 @@ $("copyBtn").addEventListener("click", ()=>{
     b.onclick=()=>{
       state.days[k].tasks=curTasks().map(t=>({...t,id:uid()}));
       state.days[k].start=curDay().start;
-      Storage.save(state); Cloud.pushSoon(); copyOverlay.hidden=true; toast("Скопировано в «"+l+"»");
+      Storage.save(state); Cloud.pushSoon(); History.record(); copyOverlay.hidden=true; toast("Скопировано в «"+l+"»");
       if(k===currentDay) renderTimeline();
     };
     copyDays.appendChild(b);
@@ -925,6 +998,7 @@ function init(){
   dayStartInput.value=curDay().start;
   dayEndInput.value=(state.settings.dayEnd)||"22:00";
   renderTimeline();
+  History.init();                      // базовый снимок для undo/redo
   setInterval(positionNowLine, 30000); // линия «сейчас» — раз в 30с
   Cloud.init();                        // подключаем облако поверх локального режима
 }
