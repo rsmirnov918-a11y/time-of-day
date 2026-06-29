@@ -139,12 +139,14 @@ header{
 .block.short .b-meta{ display:none; }
 .block.short .b-top{ font-size:11px; }
 
-.gap{
+.gap, .tail{
   position:absolute; left:0; right:0; box-sizing:border-box;
   border:1px dashed var(--grid2); border-radius:9px;
   display:flex; align-items:center; justify-content:center;
   font-size:11px; color:var(--muted); pointer-events:none; overflow:hidden;
 }
+.tail{ opacity:.55; }                       /* пустой «хвост» трека до конца окна */
+.timeline.resizing .tail{ display:none; }   /* не мигать во время ресайза */
 .now-line{
   position:absolute; left:0; right:0; height:0; z-index:20;
   border-top:2px solid var(--now); pointer-events:none;
@@ -221,6 +223,7 @@ header{
   <div class="brand">🗓️ Планировщик</div>
   <div class="tools">
     <label class="start">Старт <input type="time" id="dayStart" step="300"></label>
+    <label class="start">до <input type="time" id="dayEnd" step="300"></label>
     <button id="addBtn" class="primary">+ Задача</button>
     <button id="copyBtn">Копировать</button>
     <button id="exportBtn">Экспорт</button>
@@ -478,7 +481,7 @@ function template(){
   for(const [k] of DAYS){
     days[k]={ start:"06:00", tasks: SEED[k].map(a=>({id:uid(), name:a[0], cat:a[1], dur:a[2], fixedStart:null})) };
   }
-  return { version:1, settings:{theme:"light"}, days };
+  return { version:1, settings:{theme:"light", dayEnd:"22:00"}, days };
 }
 function normTask(t){
   return {
@@ -492,7 +495,11 @@ function normTask(t){
 function validateState(obj){
   if(!obj || typeof obj!=="object") throw new Error("не объект");
   if(!obj.days || typeof obj.days!=="object") throw new Error("нет поля days");
-  const out={ version:1, settings:{theme:(obj.settings&&obj.settings.theme==="dark")?"dark":"light"}, days:{} };
+  const _s=obj.settings||{};
+  const out={ version:1, settings:{
+    theme:(_s.theme==="dark")?"dark":"light",
+    dayEnd:/^\d{1,2}:\d{2}$/.test(_s.dayEnd)?_s.dayEnd:"22:00"
+  }, days:{} };
   for(const [k] of DAYS){
     const d=obj.days[k];
     if(!d || !Array.isArray(d.tasks)) throw new Error("день "+k+" повреждён");
@@ -506,6 +513,10 @@ let state, currentDay, editingId=null;
 const curDay     = () => state.days[currentDay];
 const curTasks   = () => curDay().tasks;
 const curStartMin= () => parseTime(curDay().start);
+const curEndMin  = () => parseTime((state.settings && state.settings.dayEnd) || "22:00");
+const winMin     = () => Math.max(0, curEndMin() - curStartMin());  // длина трека-окна, мин
+const BLOCK_GAP=6, BLOCK_VIS_MIN=8;                                  // косметический зазор между блоками
+const visH = h => Math.max(h - BLOCK_GAP, BLOCK_VIS_MIN);           // видимая высота (не влияет на время)
 
 /* ===================== РАСКЛАДКА (порядок -> позиции) =====================
    Абсолютное время НЕ хранится — оно вычисляется как накопленная сумма
@@ -528,7 +539,7 @@ const layoutCurrent = () => computeLayout(curTasks(), curStartMin());
 /* ===================== DOM-ССЫЛКИ ===================== */
 const $ = id => document.getElementById(id);
 const timelineEl=$("timeline"), scrollEl=$("scrollEl"), nowLine=$("nowLine");
-const tabsEl=$("tabs"), summaryEl=$("summary"), dayStartInput=$("dayStart");
+const tabsEl=$("tabs"), summaryEl=$("summary"), dayStartInput=$("dayStart"), dayEndInput=$("dayEnd");
 const editorOverlay=$("editorOverlay"), edName=$("edName"), edChips=$("edChips"),
       edDur=$("edDur"), edFixed=$("edFixed"), edFixedWrap=$("edFixedWrap"), edFixedTime=$("edFixedTime");
 const importOverlay=$("importOverlay"), imText=$("imText"), imErr=$("imErr");
@@ -557,15 +568,22 @@ function makeBlock(task){
 }
 function positionBlock(el, item){
   el.style.top=item.top+"px";
-  el.style.height=item.height+"px";
+  el.style.height=visH(item.height)+"px"; // высота слота = длительности, видимая чуть меньше (зазор)
   el.classList.toggle("short", item.height < 30); // короткий блок -> тап открывает редактор
   el.querySelector(".b-time").textContent=fmtTime(item.startMin);
 }
 function renderTimeline(){
-  timelineEl.querySelectorAll(".block,.gap").forEach(n=>n.remove());
+  timelineEl.querySelectorAll(".block,.gap,.tail").forEach(n=>n.remove());
   const lay=layoutCurrent();
-  timelineEl.style.height=Math.max(lay.total,120)+"px";
+  const win=winMin();
+  timelineEl.style.height=Math.max(lay.total, win, 120)+"px"; // трек всегда тянется до конца окна
   timelineEl.style.backgroundPositionY=((60-(curStartMin()%60))%60)+"px";
+  if(win>lay.total){ // задачи не заполнили окно -> пустой хвост до конца дня
+    const tail=document.createElement("div");
+    tail.className="tail"; tail.style.top=lay.total+"px"; tail.style.height=(win-lay.total)+"px";
+    tail.innerHTML="<span>свободно до "+((state.settings&&state.settings.dayEnd)||"22:00")+"</span>";
+    timelineEl.appendChild(tail);
+  }
   for(const item of lay.items){
     if(item.gapBefore>0){
       const g=document.createElement("div");
@@ -610,12 +628,12 @@ function renderSummary(){
 function positionNowLine(){
   if(currentDay!==TODAY_KEY){ nowLine.style.display="none"; return; }
   const now=new Date(); const nm=now.getHours()*60+now.getMinutes();
-  const off=nm-curStartMin(); const total=layoutCurrent().total;
+  const off=nm-curStartMin(); const total=Math.max(layoutCurrent().total, winMin());
   if(off<0||off>total){ nowLine.style.display="none"; return; }
   nowLine.style.display="block"; nowLine.style.top=off+"px";
 }
 function switchDay(k){ currentDay=k; closeEditor(); dayStartInput.value=curDay().start; renderTabs(); renderTimeline(); }
-function renderAll(){ applyTheme(); renderTabs(); dayStartInput.value=curDay().start; renderTimeline(); }
+function renderAll(){ applyTheme(); renderTabs(); dayStartInput.value=curDay().start; dayEndInput.value=(state.settings.dayEnd)||"22:00"; renderTimeline(); }
 
 /* ===================== DRAG (Pointer Events) =====================
    На телефоне: тащить за «ручку» (⠿) — она с touch-action:none, поэтому
@@ -741,11 +759,11 @@ function onResizeMove(e){
   if(dur===resizing.task.dur) return;
   resizing.task.dur=dur;
   const lay=layoutCurrent();
-  timelineEl.style.height=Math.max(lay.total,120)+"px";
+  timelineEl.style.height=Math.max(lay.total, winMin(), 120)+"px";
   for(const it of lay.items){
     const b=timelineEl.querySelector('.block[data-id="'+it.task.id+'"]');
     if(!b) continue;
-    b.style.top=it.top+"px"; b.style.height=it.height+"px";
+    b.style.top=it.top+"px"; b.style.height=visH(it.height)+"px";
     b.querySelector(".b-time").textContent=fmtTime(it.startMin);
     if(it.task.id===resizing.task.id) b.querySelector(".b-dur").textContent=fmtDur(it.task.dur);
   }
@@ -828,6 +846,9 @@ $("addBtn").addEventListener("click", ()=>{
 dayStartInput.addEventListener("change", ()=>{
   if(/^\d{1,2}:\d{2}$/.test(dayStartInput.value)){ curDay().start=dayStartInput.value; renderTimeline(); saveSoon(); }
 });
+dayEndInput.addEventListener("change", ()=>{
+  if(/^\d{1,2}:\d{2}$/.test(dayEndInput.value)){ state.settings.dayEnd=dayEndInput.value; renderTimeline(); saveSoon(); }
+});
 $("resetBtn").addEventListener("click", ()=>{
   if(!confirm("Сбросить все дни к стартовому шаблону?")) return;
   state=template(); Storage.save(state);
@@ -902,6 +923,7 @@ function init(){
   applyTheme();
   renderTabs();
   dayStartInput.value=curDay().start;
+  dayEndInput.value=(state.settings.dayEnd)||"22:00";
   renderTimeline();
   setInterval(positionNowLine, 30000); // линия «сейчас» — раз в 30с
   Cloud.init();                        // подключаем облако поверх локального режима
