@@ -98,7 +98,7 @@ header{
   background-size:100% 60px;
 }
 .block{
-  position:absolute; left:0; right:0; box-sizing:border-box;
+  position:absolute; left:46px; right:2px; box-sizing:border-box;
   border-radius:9px; padding:3px 8px 3px 26px; overflow:hidden;
   transition:top .18s cubic-bezier(.2,.7,.3,1);
   background:color-mix(in srgb, var(--cat) 16%, var(--surface));
@@ -142,14 +142,22 @@ header{
 .block.short .b-meta{ display:none; }
 .block.short .b-top{ font-size:11px; }
 
-.gap, .tail{
-  position:absolute; left:0; right:0; box-sizing:border-box;
-  border:1px dashed var(--grid2); border-radius:9px;
+/* пустые промежутки на треке = свободное время; тап = добавить задачу */
+.slot{
+  position:absolute; left:46px; right:2px; box-sizing:border-box;
+  border:1px dashed var(--grid2); border-radius:9px; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
-  font-size:11px; color:var(--muted); pointer-events:none; overflow:hidden;
+  font-size:11px; color:var(--muted); overflow:hidden;
 }
-.tail{ opacity:.55; }                       /* пустой «хвост» трека до конца окна */
-.timeline.resizing .tail{ display:none; }   /* не мигать во время ресайза */
+.slot:hover{ background:color-mix(in srgb, var(--accent) 8%, transparent); border-color:var(--accent); }
+.slot span{ opacity:.7; }
+.timeline.resizing .slot{ display:none; }
+/* часовые метки слева */
+.hour{
+  position:absolute; left:0; width:40px; text-align:right;
+  margin-top:-7px; font-size:10px; color:var(--muted);
+  font-variant-numeric:tabular-nums; pointer-events:none;
+}
 .now-line{
   position:absolute; left:0; right:0; height:0; z-index:20;
   border-top:2px solid var(--now); pointer-events:none;
@@ -195,6 +203,10 @@ header{
 }
 .chip.on{ background:color-mix(in srgb, var(--cat) 70%, var(--surface)); color:#fff; font-weight:700;
   border-color:color-mix(in srgb, var(--cat) 80%, var(--surface)); }
+/* чипы выбора дней в редакторе */
+.daychips .daychip{ --cat:var(--accent); padding:6px 10px; min-width:38px; }
+.daychips .daychip.on{ background:var(--accent); border-color:var(--accent); color:#fff; }
+.daychips .daychip.cur{ box-shadow:0 0 0 2px var(--accent) inset; font-weight:700; }
 .stepper{ display:flex; align-items:center; gap:8px; }
 .stepper button{
   width:46px; height:38px; border-radius:9px; font-weight:700;
@@ -263,10 +275,11 @@ header{
         <button data-d="15">+15</button>
       </div>
     </div>
-    <label class="fld row"><span>Закрепить время начала</span><input type="checkbox" id="edFixed"></label>
-    <label class="fld" id="edFixedWrap" hidden><span>Начинать в</span><input id="edFixedTime" type="time" step="300"></label>
+    <label class="fld"><span>Начало</span><input id="edStart" type="time" step="300"></label>
+    <div class="fld"><span>На каких днях</span><div class="chips daychips" id="edDays"></div></div>
     <div class="sheet-actions">
       <button class="danger" id="edDelete">Удалить</button>
+      <button class="danger" id="edDeleteAll">Со всех дней</button>
       <button class="primary" id="edDone">Готово</button>
     </div>
   </div>
@@ -325,23 +338,18 @@ const CATS = {
 };
 const TODAY_KEY = ["sun","mon","tue","wed","thu","fri","sat"][new Date().getDay()];
 
-/* База дня (старт 06:00, конец 22:00 = 960 мин).
-   Пн/Ср/Пт: «Теория покера» (18:00) + «Сериалы» (21:00).
-   Вт/Чт/Сб/Вс: «Проекты · задачи» (18:00) + «Чтение книг» (21:00). */
-const _evening = (k) => (k==="mon"||k==="wed"||k==="fri")
-  ? [["Теория покера","theory",120],["Английский","english",30],["Буфер","free",30],["Сериалы","free",60]]
-  : [["Проекты · задачи","projects",120],["Английский","english",30],["Буфер","free",30],["Чтение книг","free",60]];
+/* Минимальная база на «время-треке» 07:00–23:00. Остальное добавляется по надобности.
+   Формат: [название, категория, "ЧЧ:ММ", длительность, gid].
+   gid = групповой id (один и тот же блок на разных днях), для «удалить со всех дней».
+   Пн/Ср/Пт вечером — «Теория покера», остальные дни — «Проекты · задачи». */
+const _work = (k) => (k==="mon"||k==="wed"||k==="fri")
+  ? ["Теория покера","theory","19:00",120,"g_theory"]
+  : ["Проекты · задачи","projects","19:00",120,"g_projects"];
 const _baseDay = (k) => [
-  ["Утренние ритуалы","routine",60],   // 06:00
-  ["Завтрак","meal",30],               // 07:00
-  ["Сборы на тренировку","routine",15],// 07:30
-  ["Тренировка","training",90],        // 07:45
-  ["Второй завтрак","meal",45],        // 09:15 → 10:00
-  ["Покер-сессия","poker",360],        // 10:00 → 16:00
-  ["Буфер","free",30],                 // 16:00
-  ["Ужин","meal",60],                  // 16:30 → 17:30
-  ["Буфер","free",30],                 // 17:30 → 18:00
-  ...(_evening(k)),                    // 18:00 → 22:00
+  ["Тренировка","training","09:00",60,"g_train"],     // 09:00 → 10:00
+  ["Покер-сессия","poker","11:00",360,"g_session"],   // 11:00 → 17:00
+  _work(k),                                            // 19:00 → 21:00
+  ["Английский","english","21:00",30,"g_eng"],         // 21:00 → 21:30
 ];
 const SEED = {
   mon:_baseDay("mon"), tue:_baseDay("tue"), wed:_baseDay("wed"), thu:_baseDay("thu"),
@@ -539,9 +547,9 @@ const History = (() => {
 function template(){
   const days={};
   for(const [k] of DAYS){
-    days[k]={ start:"06:00", tasks: SEED[k].map(a=>({id:uid(), name:a[0], cat:a[1], dur:a[2], fixedStart:null})) };
+    days[k]={ start:"07:00", tasks: SEED[k].map(a=>({id:uid(), name:a[0], cat:a[1], start:parseTime(a[2]), dur:a[3], gid:a[4]})) };
   }
-  return { version:1, settings:{theme:"light", dayEnd:"22:00"}, days };
+  return { version:1, settings:{theme:"light", dayEnd:"23:00"}, days };
 }
 function normTask(t){
   return {
@@ -549,7 +557,9 @@ function normTask(t){
     name: String((t&&t.name) ?? "Задача"),
     cat: (t && CATS[t.cat]) ? t.cat : "free",
     dur: clamp(roundTo5(+( (t&&t.dur) || 60)), 10, 24*60),
-    fixedStart: (t && t.fixedStart!=null && isFinite(t.fixedStart)) ? clamp(roundTo5(+t.fixedStart),0,24*60) : null,
+    // время старта; у старых данных поля нет -> проставим последовательно ниже
+    start: (t && t.start!=null && isFinite(t.start)) ? clamp(roundTo5(+t.start),0,24*60) : null,
+    gid: (t && t.gid) ? String(t.gid) : uid(),   // группа «один блок на разных днях»
   };
 }
 function validateState(obj){
@@ -558,12 +568,16 @@ function validateState(obj){
   const _s=obj.settings||{};
   const out={ version:1, settings:{
     theme:(_s.theme==="dark")?"dark":"light",
-    dayEnd:/^\d{1,2}:\d{2}$/.test(_s.dayEnd)?_s.dayEnd:"22:00"
+    dayEnd:/^\d{1,2}:\d{2}$/.test(_s.dayEnd)?_s.dayEnd:"23:00"
   }, days:{} };
   for(const [k] of DAYS){
     const d=obj.days[k];
     if(!d || !Array.isArray(d.tasks)) throw new Error("день "+k+" повреждён");
     out.days[k]={ start:/^\d{1,2}:\d{2}$/.test(d.start)?d.start:"07:00", tasks:d.tasks.map(normTask) };
+    // миграция старых данных (без поля start) -> расставляем встык от старта дня
+    let cur=parseTime(out.days[k].start);
+    for(const t of out.days[k].tasks){ if(t.start==null) t.start=cur; cur=t.start+t.dur; }
+    out.days[k].tasks.sort((a,b)=>a.start-b.start);
   }
   return out;
 }
@@ -572,36 +586,64 @@ let state, currentDay, editingId=null;
 
 const curDay     = () => state.days[currentDay];
 const curTasks   = () => curDay().tasks;
-const curStartMin= () => parseTime(curDay().start);
-const curEndMin  = () => parseTime((state.settings && state.settings.dayEnd) || "22:00");
-const winMin     = () => Math.max(0, curEndMin() - curStartMin());  // длина трека-окна, мин
+const winStartMin= () => parseTime(curDay().start);                              // верх трека-окна
+const winEndMin  = () => parseTime((state.settings && state.settings.dayEnd) || "23:00"); // низ окна
 const BLOCK_GAP=6, BLOCK_VIS_MIN=8;                                  // косметический зазор между блоками
 const visH = h => Math.max(h - BLOCK_GAP, BLOCK_VIS_MIN);           // видимая высота (не влияет на время)
+const clampStart = s => clamp(roundTo5(s), winStartMin(), 24*60);  // время старта не раньше начала окна
 
-/* ===================== РАСКЛАДКА (порядок -> позиции) =====================
-   Абсолютное время НЕ хранится — оно вычисляется как накопленная сумма
-   длительностей от старта дня. Поэтому наложения невозможны в принципе. */
-function computeLayout(tasks, startMin){
-  let cursor=startMin, topPx=0;
-  const items=[];
-  for(const t of tasks){
-    let gap=0;
-    if(t.fixedStart!=null && t.fixedStart>cursor) gap=t.fixedStart-cursor; // закреплённое время -> авто-зазор
-    const gapTop=topPx;
-    cursor+=gap; topPx+=gap;
-    items.push({ task:t, top:topPx, height:t.dur, startMin:cursor, gapBefore:gap, gapTop });
-    cursor+=t.dur; topPx+=t.dur;
+/* ===================== ВРЕМЯ-ТРЕК =====================
+   У каждой задачи СВОЁ время старта (task.start, минуты от полуночи).
+   Свободное время между задачами — просто пустые промежутки на треке.
+   Наложений нет: при раскладке блоки каскадно раздвигаются вниз. */
+function computeLayout(tasks, vs){
+  const sorted=[...tasks].sort((a,b)=>a.start-b.start);
+  let cursor=-1e9; const items=[];
+  for(const t of sorted){
+    const s=Math.max(t.start, cursor);     // не раньше конца предыдущего -> без наложений
+    items.push({ task:t, top:s-vs, height:t.dur, startMin:s });
+    cursor=s+t.dur;
   }
-  return { items, total:topPx };
+  const endMin = items.length ? items[items.length-1].startMin+items[items.length-1].height : vs;
+  return { items, endMin };
 }
-const layoutCurrent = () => computeLayout(curTasks(), curStartMin());
+function viewStart(){ let m=winStartMin(); for(const t of curTasks()) if(t.start<m) m=t.start; return m; }
+const layoutCurrent = () => computeLayout(curTasks(), viewStart());
+function viewEnd(){ return Math.max(winEndMin(), layoutCurrent().endMin); }
+
+/* Раскладка с «якорем»: активный блок (anchor) стоит на своём времени,
+   остальные раздвигаются вокруг него (вверх до якоря, вниз после). Возвращает Map task->start. */
+function placeAnchored(tasks, anchor){
+  const aStart=anchor.start, aEnd=anchor.start+anchor.dur;
+  const others=tasks.filter(t=>t!==anchor).sort((a,b)=>a.start-b.start);
+  const above=[], below=[];
+  for(const t of others){ if(t.start+t.dur<=aStart) above.push(t); else below.push(t); }
+  const out=new Map(); out.set(anchor, aStart);
+  let top=aStart;                                   // пакуем «верхних» вверх, конец <= aStart
+  for(let i=above.length-1;i>=0;i--){ const t=above[i]; const s=Math.min(t.start, top-t.dur); out.set(t,s); top=s; }
+  let cur=aEnd;                                      // «нижних» — вниз от конца якоря
+  for(const t of below){ const s=Math.max(t.start,cur); out.set(t,s); cur=s+t.dur; }
+  return out;
+}
+/* Привести данные к виду без наложений и пересортировать (после любого изменения). */
+function normalize(anchor){
+  if(anchor){ const map=placeAnchored(curTasks(), anchor); for(const [t,s] of map) t.start=s; }
+  else { const items=computeLayout(curTasks(),0).items; for(const it of items) it.task.start=it.startMin; }
+  curDay().tasks=[...curTasks()].sort((a,b)=>a.start-b.start);
+}
+function normalizeDay(dayKey){   // привести произвольный день (для копий на другие дни)
+  const arr=state.days[dayKey].tasks;
+  const items=computeLayout(arr,0).items;
+  for(const it of items) it.task.start=it.startMin;
+  state.days[dayKey].tasks=[...arr].sort((a,b)=>a.start-b.start);
+}
 
 /* ===================== DOM-ССЫЛКИ ===================== */
 const $ = id => document.getElementById(id);
 const timelineEl=$("timeline"), scrollEl=$("scrollEl"), nowLine=$("nowLine");
 const tabsEl=$("tabs"), summaryEl=$("summary"), dayStartInput=$("dayStart"), dayEndInput=$("dayEnd");
 const editorOverlay=$("editorOverlay"), edName=$("edName"), edChips=$("edChips"),
-      edDur=$("edDur"), edFixed=$("edFixed"), edFixedWrap=$("edFixedWrap"), edFixedTime=$("edFixedTime");
+      edDur=$("edDur"), edStart=$("edStart"), edDays=$("edDays");
 const importOverlay=$("importOverlay"), imText=$("imText"), imErr=$("imErr");
 const copyOverlay=$("copyOverlay"), copyDays=$("copyDays");
 const themeBtn=$("themeBtn"), toastEl=$("toast");
@@ -611,7 +653,6 @@ function makeBlock(task){
   const el=document.createElement("div");
   el.className="block cat-"+task.cat;
   el.dataset.id=task.id;
-  if(task.fixedStart!=null) el.dataset.pinned="1";
   el.style.setProperty("--cat", CATS[task.cat].color);
   el.innerHTML =
     '<div class="grip">⠿</div>'+
@@ -633,29 +674,29 @@ function positionBlock(el, item){
   el.querySelector(".b-time").textContent=fmtTime(item.startMin);
 }
 function renderTimeline(){
-  timelineEl.querySelectorAll(".block,.gap,.tail").forEach(n=>n.remove());
-  const lay=layoutCurrent();
-  const win=winMin();
-  timelineEl.style.height=Math.max(lay.total, win, 120)+"px"; // трек всегда тянется до конца окна
-  timelineEl.style.backgroundPositionY=((60-(curStartMin()%60))%60)+"px";
-  if(win>lay.total){ // задачи не заполнили окно -> пустой хвост до конца дня
-    const tail=document.createElement("div");
-    tail.className="tail"; tail.style.top=lay.total+"px"; tail.style.height=(win-lay.total)+"px";
-    tail.innerHTML="<span>свободно до "+((state.settings&&state.settings.dayEnd)||"22:00")+"</span>";
-    timelineEl.appendChild(tail);
+  timelineEl.querySelectorAll(".block,.slot,.hour").forEach(n=>n.remove());
+  const vs=viewStart(), ve=viewEnd();
+  const lay=computeLayout(curTasks(), vs);
+  timelineEl.style.height=Math.max(ve-vs, 120)+"px";     // трек всегда на всё окно 06:00–22:00
+  timelineEl.style.backgroundPositionY=((60-(vs%60))%60)+"px";
+  // часовые метки слева
+  for(let m=Math.ceil(vs/60)*60; m<=ve; m+=60){
+    const h=document.createElement("div"); h.className="hour"; h.style.top=(m-vs)+"px";
+    h.textContent=fmtTime(m); timelineEl.appendChild(h);
   }
-  for(const item of lay.items){
-    if(item.gapBefore>0){
-      const g=document.createElement("div");
-      g.className="gap";
-      g.style.top=item.gapTop+"px"; g.style.height=item.gapBefore+"px";
-      g.innerHTML="<span>свободно "+fmtDur(item.gapBefore)+"</span>";
-      timelineEl.appendChild(g);
-    }
-    const el=makeBlock(item.task);
-    positionBlock(el,item);
-    timelineEl.appendChild(el);
-  }
+  // свободные промежутки (тап = добавить задачу на это время)
+  const addSlot=(a,b)=>{ if(b-a<5) return;
+    const s=document.createElement("div"); s.className="slot";
+    s.style.top=(a-vs)+"px"; s.style.height=(b-a)+"px";
+    if(b-a>=20) s.innerHTML="<span>свободно "+fmtDur(b-a)+" · + задача</span>";
+    s.addEventListener("click", ()=>addTaskAt(a));
+    timelineEl.appendChild(s);
+  };
+  let cur=vs;
+  for(const it of lay.items){ addSlot(cur, it.startMin); cur=it.startMin+it.height; }
+  addSlot(cur, ve);
+  // блоки
+  for(const it of lay.items){ const el=makeBlock(it.task); positionBlock(el,it); timelineEl.appendChild(el); }
   positionNowLine();
   renderSummary();
 }
@@ -670,26 +711,28 @@ function renderTabs(){
   }
 }
 function renderSummary(){
-  const by={}; let total=0;
-  for(const t of curTasks()){ by[t.cat]=(by[t.cat]||0)+t.dur; total+=t.dur; }
-  const endMin=curStartMin()+layoutCurrent().total;
+  const by={};
+  for(const t of curTasks()){ by[t.cat]=(by[t.cat]||0)+t.dur; }
+  const endMin=layoutCurrent().endMin;
   const overDays=Math.floor(endMin/1440);                 // на сколько суток день уходит за полночь
   const endLabel=fmtTime(endMin)+(overDays>0?" (+"+overDays+"д)":"");
+  const scheduled=curTasks().reduce((s,t)=>s+t.dur,0);
+  const free=Math.max(0, (winEndMin()-winStartMin()) - scheduled);  // свободное место в окне
   const part=(k,lbl)=> by[k] ? '<span class="s-chip" style="--cat:'+CATS[k].color+'">'+lbl+" "+fmtDur(by[k])+"</span>" : "";
   let wp=0, wt=0;
   for(const [k] of DAYS) for(const t of state.days[k].tasks){ if(t.cat==="poker") wp+=t.dur; if(t.cat==="theory") wt+=t.dur; }
   summaryEl.innerHTML =
     '<div class="s-line"><span class="s-range">'+curDay().start+" → "+endLabel+"</span>"+
-      part("poker","Сессия")+part("theory","Теория")+part("training","Спорт")+
-      part("projects","Проекты")+part("english","Англ.")+part("free","Свободно ≈")+
+      part("poker","Сессия")+part("theory","Теория")+part("training","Спорт")+part("projects","Проекты")+
+      '<span class="s-chip" style="--cat:#9aa3b2">Свободно ≈ '+fmtDur(free)+"</span>"+
     "</div>"+
     '<div class="s-week">Неделя: Покер '+fmtDur(wp)+" · Теория "+fmtDur(wt)+"</div>";
 }
 function positionNowLine(){
   if(currentDay!==TODAY_KEY){ nowLine.style.display="none"; return; }
   const now=new Date(); const nm=now.getHours()*60+now.getMinutes();
-  const off=nm-curStartMin(); const total=Math.max(layoutCurrent().total, winMin());
-  if(off<0||off>total){ nowLine.style.display="none"; return; }
+  const vs=viewStart(); const off=nm-vs;
+  if(off<0||off>(viewEnd()-vs)){ nowLine.style.display="none"; return; }
   nowLine.style.display="block"; nowLine.style.top=off+"px";
 }
 function switchDay(k){ currentDay=k; closeEditor(); dayStartInput.value=curDay().start; renderTabs(); renderTimeline(); }
@@ -707,7 +750,7 @@ function onPointerDown(e, task, el){
   const onGrip = !!e.target.closest(".grip");
   const eligible = onGrip || e.pointerType==="mouse";
   press={ task, block:el, pointerId:e.pointerId, startX:e.clientX, startY:e.clientY,
-          moved:false, dragging:false, eligible, candidate:curTasks() };
+          moved:false, dragging:false, eligible };
   if(eligible){ try{ el.setPointerCapture(e.pointerId); }catch(_){ } }
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
@@ -731,9 +774,10 @@ function onPointerCancel(e){
   if(!press || e.pointerId!==press.pointerId) return;
   if(press.dragging){
     stopAutoScroll();
+    if(press.origStart!=null) press.task.start=press.origStart; // откат времени
     press.block.classList.remove("dragging");
     document.body.classList.remove("dragging-active");
-    renderTimeline(); // откат к сохранённому порядку
+    renderTimeline();
   }
   cleanupPress();
 }
@@ -747,10 +791,8 @@ function cleanupPress(){
 function startDrag(e){
   press.dragging=true;
   try{ press.block.setPointerCapture(e.pointerId); }catch(_){ }
-  const lay=layoutCurrent();
-  press.total=lay.total;
-  press.h=press.task.dur;
-  press.others=curTasks().filter(t=>t.id!==press.task.id);
+  press.vs=viewStart();
+  press.origStart=press.task.start;
   press.map={}; timelineEl.querySelectorAll(".block").forEach(b=>press.map[b.dataset.id]=b);
   press.grabOffset = e.clientY - press.block.getBoundingClientRect().top;
   press.block.classList.add("dragging");
@@ -761,27 +803,20 @@ function startDrag(e){
 function dragMoveTo(clientY){
   press.lastY=clientY;
   const trect=timelineEl.getBoundingClientRect();
-  const top=clamp((clientY-trect.top)-press.grabOffset, 0, Math.max(0, press.total-press.h));
-  press.block.style.top=top+"px";
-  const center=top+press.h/2;
-  const startMin=curStartMin();
-  // точка вставки = число «чужих» блоков, чьи центры выше центра перетаскиваемого
-  const lo=computeLayout(press.others, startMin).items;
-  let k=0; for(const it of lo){ if(it.top+it.height/2 < center) k++; else break; }
-  const candidate=press.others.slice(0,k).concat([press.task], press.others.slice(k));
-  press.candidate=candidate;
-  // раздвигаем соседей: пересчёт раскладки кандидата, все остальные едут на свои места
-  const cl=computeLayout(candidate, startMin).items;
-  for(const it of cl){
-    if(it.task.id===press.task.id){ press.block.querySelector(".b-time").textContent=fmtTime(it.startMin); continue; }
-    const el=press.map[it.task.id]; if(!el) continue;
-    el.style.top=it.top+"px";
-    el.querySelector(".b-time").textContent=fmtTime(it.startMin);
+  const vs=press.vs;
+  const topPx=(clientY-trect.top)-press.grabOffset;
+  const start=clampStart(vs+topPx);            // время старта по позиции пальца (кратно 5)
+  press.task.start=start;                       // временно двигаем якорь
+  const map=placeAnchored(curTasks(), press.task);
+  for(const [t,s] of map){
+    const el=press.map[t.id]; if(!el) continue;
+    el.style.top=(s-vs)+"px";
+    el.querySelector(".b-time").textContent=fmtTime(s);
   }
 }
 function commitDrag(){
   stopAutoScroll();
-  curDay().tasks=press.candidate;
+  normalize(press.task);                         // зафиксировать и убрать наложения
   press.block.classList.remove("dragging");
   document.body.classList.remove("dragging-active");
   saveSoon();
@@ -818,14 +853,16 @@ function onResizeMove(e){
   const dur=clamp(roundTo5(e.clientY-top), 10, 24*60);
   if(dur===resizing.task.dur) return;
   resizing.task.dur=dur;
-  const lay=layoutCurrent();
-  timelineEl.style.height=Math.max(lay.total, winMin(), 120)+"px";
-  for(const it of lay.items){
-    const b=timelineEl.querySelector('.block[data-id="'+it.task.id+'"]');
+  const vs=viewStart();
+  const map=placeAnchored(curTasks(), resizing.task); // тянем низ -> нижние блоки раздвигаются
+  let ve=winEndMin(); for(const [t,s] of map) ve=Math.max(ve, s+t.dur);
+  timelineEl.style.height=Math.max(ve-vs, 120)+"px";
+  for(const [t,s] of map){
+    const b=timelineEl.querySelector('.block[data-id="'+t.id+'"]');
     if(!b) continue;
-    b.style.top=it.top+"px"; b.style.height=visH(it.height)+"px";
-    b.querySelector(".b-time").textContent=fmtTime(it.startMin);
-    if(it.task.id===resizing.task.id) b.querySelector(".b-dur").textContent=fmtDur(it.task.dur);
+    b.style.top=(s-vs)+"px"; b.style.height=visH(t.dur)+"px";
+    b.querySelector(".b-time").textContent=fmtTime(s);
+    if(t===resizing.task) b.querySelector(".b-dur").textContent=fmtDur(t.dur);
   }
   renderSummary();
 }
@@ -837,6 +874,7 @@ function onResizeUp(e){
   window.removeEventListener("pointerup", onResizeUp);
   window.removeEventListener("pointercancel", onResizeUp);
   try{ resizing.el.releasePointerCapture(resizing.pointerId); }catch(_){ }
+  normalize(resizing.task);
   resizing=null;
   saveSoon();
   renderTimeline();
@@ -844,7 +882,6 @@ function onResizeUp(e){
 
 /* ===================== РЕДАКТОР ===================== */
 const editingTask = () => curTasks().find(t=>t.id===editingId);
-function computedStart(task){ const it=layoutCurrent().items.find(i=>i.task.id===task.id); return it?it.startMin:curStartMin(); }
 function buildChips(task){
   edChips.innerHTML="";
   for(const k in CATS){
@@ -856,15 +893,35 @@ function buildChips(task){
     edChips.appendChild(c);
   }
 }
+function buildDayChips(task){
+  edDays.innerHTML="";
+  const mk=(label,on,cur,fn)=>{ const c=document.createElement("button");
+    c.className="chip daychip"+(on?" on":"")+(cur?" cur":""); c.textContent=label; c.onclick=fn; return c; };
+  // быстрая кнопка «Все дни»
+  edDays.appendChild(mk("Все дни", false, false, ()=>{
+    for(const [k] of DAYS){ if(k===currentDay) continue;
+      if(!state.days[k].tasks.some(t=>t.gid===task.gid)){ state.days[k].tasks.push({...task, id:uid()}); normalizeDay(k); } }
+    buildDayChips(task); renderTimeline(); saveSoon();
+  }));
+  for(const [k,l] of DAYS){
+    const has=state.days[k].tasks.some(t=>t.gid===task.gid);
+    edDays.appendChild(mk(l, has, k===currentDay, ()=>{
+      if(k===currentDay) return;                 // текущий день не трогаем (для него — кнопка «Удалить»)
+      if(state.days[k].tasks.some(t=>t.gid===task.gid))
+        state.days[k].tasks=state.days[k].tasks.filter(t=>t.gid!==task.gid);
+      else { state.days[k].tasks.push({...task, id:uid()}); normalizeDay(k); }
+      buildDayChips(task); renderTimeline(); saveSoon();
+    }));
+  }
+}
 function openEditor(id){
   const task=curTasks().find(t=>t.id===id); if(!task) return;
   editingId=id;
   edName.value=task.name;
   buildChips(task);
+  buildDayChips(task);
   edDur.textContent=fmtDur(task.dur);
-  edFixed.checked = task.fixedStart!=null;
-  edFixedWrap.hidden = task.fixedStart==null;
-  edFixedTime.value = fmtTime(task.fixedStart!=null ? task.fixedStart : computedStart(task));
+  edStart.value=fmtTime(task.start);
   editorOverlay.hidden=false;
 }
 function closeEditor(){ editorOverlay.hidden=true; editingId=null; }
@@ -874,22 +931,27 @@ document.querySelector(".stepper").addEventListener("click", e=>{
   const b=e.target.closest("button[data-d]"); if(!b) return;
   const t=editingTask(); if(!t) return;
   t.dur=clamp(t.dur+(+b.dataset.d), 10, 24*60);
+  normalize(t);                                  // нижние блоки раздвигаются
   edDur.textContent=fmtDur(t.dur); renderTimeline(); saveSoon();
 });
-edFixed.addEventListener("change", ()=>{
+edStart.addEventListener("change", ()=>{        // задать время начала — блок переезжает туда
   const t=editingTask(); if(!t) return;
-  if(edFixed.checked){ t.fixedStart=roundTo5(computedStart(t)); edFixedTime.value=fmtTime(t.fixedStart); }
-  else t.fixedStart=null;
-  edFixedWrap.hidden=!edFixed.checked;
-  renderTimeline(); saveSoon();
-});
-edFixedTime.addEventListener("input", ()=>{
-  const t=editingTask(); if(!t||t.fixedStart==null) return;
-  t.fixedStart=parseTime(edFixedTime.value); renderTimeline(); saveSoon();
+  if(/^\d{1,2}:\d{2}$/.test(edStart.value)){
+    t.start=clampStart(parseTime(edStart.value));
+    normalize(t);                                // соседние раздвигаются, без наложений
+    edStart.value=fmtTime(t.start);
+    renderTimeline(); saveSoon();
+  }
 });
 $("edDelete").addEventListener("click", ()=>{
   const i=curTasks().findIndex(t=>t.id===editingId);
   if(i>=0) curTasks().splice(i,1);
+  closeEditor(); renderTimeline(); saveSoon();
+});
+$("edDeleteAll").addEventListener("click", ()=>{          // удалить эту задачу со всех дней (по gid)
+  const t=editingTask(); if(!t) return;
+  const gid=t.gid;
+  for(const [k] of DAYS) state.days[k].tasks=state.days[k].tasks.filter(x=>x.gid!==gid);
   closeEditor(); renderTimeline(); saveSoon();
 });
 $("edDone").addEventListener("click", closeEditor);
@@ -897,11 +959,16 @@ $("edClose").addEventListener("click", closeEditor);
 editorOverlay.addEventListener("click", e=>{ if(e.target===editorOverlay) closeEditor(); });
 
 /* ===================== ПАНЕЛЬ ИНСТРУМЕНТОВ ===================== */
-$("addBtn").addEventListener("click", ()=>{
-  const t={ id:uid(), name:"Новая задача", cat:"free", dur:60, fixedStart:null };
-  curTasks().push(t); renderTimeline(); saveSoon();
-  scrollEl.scrollTop=scrollEl.scrollHeight;
+function addTaskAt(startMin){
+  const dur=60;
+  const t={ id:uid(), gid:uid(), name:"Новая задача", cat:"free", dur, start:clampStart(startMin) };
+  curTasks().push(t); normalize(t);              // встанет на это время, соседи раздвинутся
+  renderTimeline(); saveSoon();
   openEditor(t.id);
+}
+$("addBtn").addEventListener("click", ()=>{
+  addTaskAt(layoutCurrent().endMin);             // по умолчанию — в конец дня
+  scrollEl.scrollTop=scrollEl.scrollHeight;
 });
 dayStartInput.addEventListener("change", ()=>{
   if(/^\d{1,2}:\d{2}$/.test(dayStartInput.value)){ curDay().start=dayStartInput.value; renderTimeline(); saveSoon(); }
