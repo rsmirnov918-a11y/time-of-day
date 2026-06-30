@@ -392,6 +392,9 @@ function saveSoon(){
 const Cloud = (() => {
   let auth=null, db=null, user=null, unsub=null, ready=false;
   let timer=null, applyingRemote=false, lastSyncedJSON=null;
+  // канонический отпечаток состояния: фиксированный порядок ключей,
+  // чтобы эхо из Firestore (другой порядок ключей) распознавалось как «своё»
+  const canon = s => { try{ return JSON.stringify(validateState(s)); }catch(e){ return JSON.stringify(s); } };
 
   function init(){
     try{
@@ -424,11 +427,11 @@ const Cloud = (() => {
         }
         const data = snap.data();
         if(!data || !data.state) return;
-        const json = JSON.stringify(data.state);
-        if(json === lastSyncedJSON) return;        // это наш же эхо-снимок
-        if(json === JSON.stringify(state)) { lastSyncedJSON = json; return; }
-        lastSyncedJSON = json;
-        applyRemote(data.state);                    // облако — источник правды
+        const incoming = canon(data.state);
+        if(incoming === lastSyncedJSON) return;            // наш же эхо-снимок
+        if(incoming === canon(state)){ lastSyncedJSON = incoming; return; } // те же данные, что уже есть
+        lastSyncedJSON = incoming;
+        applyRemote(data.state);                            // настоящее изменение из облака
       },
       (err) => { toast("⚠ нет синхронизации"); }
     );
@@ -455,8 +458,7 @@ const Cloud = (() => {
   async function pushNow(){
     if(!ready || !user) return;
     try{
-      const json = JSON.stringify(state);
-      lastSyncedJSON = json;                         // помечаем, чтобы игнорировать свой эхо-снимок
+      lastSyncedJSON = canon(state);                 // канон. отпечаток нашей записи (для отсечки эха)
       await setDoc(doc(db,"schedules",user.uid),
                    { state, updatedAt: serverTimestamp() }, { merge:true });
     }catch(e){ toast("⚠ офлайн / нет синка"); }
