@@ -853,36 +853,44 @@ function catRow(color,label,min,frac){
     '<div class="cr-top"><span class="dot"></span><span class="cr-name">'+label+'</span><span class="cr-h">'+fmtDur(min)+'</span></div>'+
     '<div class="bar"><i style="width:'+w.toFixed(1)+'%"></i></div></div>';
 }
+const FREE_DOT="oklch(0.82 0.014 82)";
+const busyOf=tasks=>tasks.reduce((s,t)=>s+(t.cat==="free"?0:t.dur),0);  // «занято» = без «свободных» блоков
 function renderSummary(){
   const tasks=curTasks();
-  const scheduled=tasks.reduce((s,t)=>s+t.dur,0);
+  const busy=busyOf(tasks);
   const win=Math.max(1, winEndMin()-winStartMin());
-  const free=Math.max(0, win - scheduled);
+  const free=Math.max(0, win - busy);                          // свободно = пустые промежутки + блоки «Свободно»
   const endMin=layoutCurrent().endMin;
   const overDays=Math.floor(endMin/1440);
   const endLabel=fmtTime(endMin)+(overDays>0?" (+"+overDays+"д)":"");
-  // строка-заголовок дня
   dayHeaderEl.innerHTML='<span class="dname serif">'+DAY_FULL[currentDay]+'</span>'+
-    '<span class="dsum">'+plTasks(tasks.length)+' · занято <b>'+fmtDur(scheduled)+'</b> · свободно <b>'+fmtDur(free)+'</b></span>';
-  renderRail(scheduled, free, endLabel, win);
+    '<span class="dsum">'+plTasks(tasks.length)+' · занято <b>'+fmtDur(busy)+'</b> · свободно <b>'+fmtDur(free)+'</b></span>';
+  renderRail(busy, free, endLabel, win);
 }
-function renderRail(scheduled, free, endLabel, win){
-  const by={}; for(const t of curTasks()){ by[t.cat]=(by[t.cat]||0)+t.dur; }
+function renderRail(busy, free, endLabel, win){
+  // категории дня (без «free» — свободное сводим в одну строку, не дублируя)
+  const by={}; for(const t of curTasks()){ if(t.cat==="free") continue; by[t.cat]=(by[t.cat]||0)+t.dur; }
   const order=Object.keys(by).sort((a,b)=>by[b]-by[a]);
   let catRows=""; for(const k of order) catRows+=catRow(CATS[k].color, CATS[k].label, by[k], by[k]/win);
-  catRows+=catRow("oklch(0.82 0.014 82)", "Свободно", free, free/win);
-  const wk={}; let wkTotal=0;
-  for(const [k] of DAYS) for(const t of state.days[k].tasks){ wk[t.cat]=(wk[t.cat]||0)+t.dur; wkTotal+=t.dur; }
-  const wkOrder=Object.keys(wk).sort((a,b)=>wk[b]-wk[a]);     // все категории недели, по убыванию
-  const wkMax=Math.max(1, ...wkOrder.map(k=>wk[k]));          // полоски относительно самой большой
+  catRows+=catRow(FREE_DOT, "Свободно", free, free/win);
+  // неделя: реальные категории + СУММАРНОЕ свободное время (окно каждого дня − занято)
+  const wk={}; let wkTotal=0, weekFree=0; const end=winEndMin();
+  for(const [k] of DAYS){
+    const d=state.days[k]; const winD=Math.max(1, end - parseTime(d.start)); const busyD=busyOf(d.tasks);
+    for(const t of d.tasks){ if(t.cat==="free") continue; wk[t.cat]=(wk[t.cat]||0)+t.dur; }
+    wkTotal+=busyD; weekFree+=Math.max(0, winD-busyD);
+  }
+  const wkOrder=Object.keys(wk).sort((a,b)=>wk[b]-wk[a]);
+  const wkMax=Math.max(1, weekFree, ...wkOrder.map(k=>wk[k]));
   let wkRows=""; for(const k of wkOrder) wkRows+=catRow(CATS[k].color, CATS[k].label, wk[k], wk[k]/wkMax);
+  wkRows+=catRow(FREE_DOT, "Свободно", weekFree, weekFree/wkMax);
   railEl.innerHTML=
     '<div class="rail-card">'+
       '<div class="eyebrow">Сегодня</div>'+
       '<div class="r-day serif">'+DAY_FULL[currentDay]+'</div>'+
       '<div class="r-range">'+curDay().start+' → '+endLabel+'</div>'+
       '<div class="r-metrics">'+
-        '<div><div class="v">'+fmtDur(scheduled)+'</div><div class="k">занято</div></div>'+
+        '<div><div class="v">'+fmtDur(busy)+'</div><div class="k">занято</div></div>'+
         '<div><div class="v">'+fmtDur(free)+'</div><div class="k">свободно</div></div>'+
       '</div><hr>'+
       '<div class="eyebrow">Категории дня</div>'+catRows+'<hr>'+
